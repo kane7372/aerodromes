@@ -17,7 +17,7 @@ def load_data():
     # 여기서는 업로드하신 파일과 유사한 형태의 가상 데이터를 로드한다고 가정
     # 실제 배포 시에는 'rksi_stands.csv'를 같은 폴더에 두고 pd.read_csv('rksi_stands.csv') 사용
     try:
-        df = pd.read_csv('(2-3) AIRCRAFT PARKING DOCKING CHART_OCR.csv')
+        df = pd.read_csv('rksi_stands.csv')
     except:
         st.error("데이터 파일을 찾을 수 없습니다.")
         return pd.DataFrame()
@@ -112,3 +112,4 @@ if not df.empty:
 else:
 
     st.warning("데이터 파일을 로드할 수 없습니다. rksi_stands.csv 파일을 확인해주세요.")
+
