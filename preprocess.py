@@ -1,18 +1,16 @@
 import pandas as pd
 import re
 
-# 1. 원본 파일 읽기 (사용자님이 업로드하신 파일명과 일치해야 함)
-# 만약 파일명이 다르다면 아래 이름을 실제 파일명으로 수정해주세요.
-input_file = '(2-3) AIRCRAFT PARKING DOCKING CHART_OCR.csv'
+# 1. 파일 로드
+file_path = '(2-3) AIRCRAFT PARKING DOCKING CHART_OCR.csv'
 
 try:
-    df = pd.read_csv(input_file)
-    print(f"파일 로드 성공: {input_file}")
+    df = pd.read_csv(file_path)
+    print(f"📂 파일 로드 성공: {file_path}")
 except FileNotFoundError:
-    print(f"오류: '{input_file}' 파일을 찾을 수 없습니다. 파일명을 확인해주세요.")
+    print(f"❌ 오류: '{file_path}' 파일을 찾을 수 없습니다.")
     exit()
 
-# 2. 좌표 변환 함수 (OCR 텍스트 -> 숫자)
 def dms_to_decimal(dms_str):
     clean_str = re.sub(r"[^\d\.]", " ", str(dms_str))
     parts = clean_str.split()
@@ -20,53 +18,69 @@ def dms_to_decimal(dms_str):
     try:
         deg, min_val = float(parts[0]), float(parts[1])
         sec = float(parts[2]) if len(parts) > 2 else 0.0
-        # 인천공항 위도(37), 경도(126) 범위 체크
-        decimal_val = deg + min_val/60 + sec/3600
-        if 37 <= decimal_val <= 38 or 126 <= decimal_val <= 127:
-            return decimal_val
+        val = deg + min_val/60 + sec/3600
+        if (37 <= val <= 38) or (126 <= val <= 127): return val
         return None
     except: return None
 
-# 3. 데이터 추출
 extracted_data = []
 rows = df.values.tolist()
 
+# [핵심] 현재 읽고 있는 구역을 저장할 변수 (기본값: Passenger Apron)
+current_zone = "Passenger Apron"
+
 for r_idx, row in enumerate(rows):
-    # '37...N' 패턴(위도)과 '126...E' 패턴(경도) 찾기
+    # 1. 행 전체 텍스트에서 구역(Zone) 키워드 감지
+    row_text = " ".join([str(x) for x in row if pd.notna(x)])
+    
+    if "Cargo Apron" in row_text:
+        current_zone = "Cargo Apron"
+    elif "Maintenance Apron" in row_text:
+        current_zone = "Maintenance Apron"
+    elif "Isolated Security" in row_text:
+        current_zone = "Isolated Security Position"
+    elif "Deicing" in row_text or "De-icing" in row_text:
+        current_zone = "De-icing Apron"
+    elif "Apron" in row_text and "Cargo" not in row_text and "Maintenance" not in row_text:
+        # Apron 1, Apron 2 등은 여객(Passenger)로 통일하거나 그대로 사용
+        current_zone = "Passenger Apron"
+
+    # 2. 좌표 추출 로직 (기존과 동일)
     lat_indices = [i for i, cell in enumerate(row) if isinstance(cell, str) and re.search(r"37[\D\d]*N", cell)]
     lon_indices = [i for i, cell in enumerate(row) if isinstance(cell, str) and re.search(r"126[\D\d]*E", cell)]
     
     for lat_idx in lat_indices:
-        # 위도 셀 바로 오른쪽에 있는 경도 셀 매칭
         valid_lon = [i for i in lon_indices if i > lat_idx]
         if not valid_lon: continue
         lon_idx = valid_lon[0]
         
-        # 한 셀에 엔터로 여러 줄이 있는 경우 처리
-        lat_lines = str(row[lat_idx]).split('\n')
-        lon_lines = str(row[lon_idx]).split('\n')
+        lat_dec = dms_to_decimal(str(row[lat_idx]))
+        lon_dec = dms_to_decimal(str(row[lon_idx]))
         
-        for i in range(min(len(lat_lines), len(lon_lines))):
-            lat_dec = dms_to_decimal(lat_lines[i])
-            lon_dec = dms_to_decimal(lon_lines[i])
+        if lat_dec and lon_dec:
+            # Stand ID 추출
+            stand_id = f"Spot_{len(extracted_data)+1}"
+            match = re.search(r"^(\d+[A-Z]?)\s+37", str(row[lat_idx]))
+            if match:
+                stand_id = match.group(1)
             
-            if lat_dec and lon_dec and (37.4 < lat_dec < 37.6) and (126.3 < lon_dec < 126.6):
-                # 주기장 번호(Stand ID) 추출 시도
-                stand_match = re.search(r"^(\d+[A-Z]?)\s+37", lat_lines[i])
-                stand_id = stand_match.group(1) if stand_match else f"Spot_{len(extracted_data)+1}"
-                
-                extracted_data.append({
-                    'Stand_ID': stand_id,
-                    'Lat': lat_dec,
-                    'Lon': lon_dec
-                })
+            # 800번대는 De-icing으로 강제 분류 (보정)
+            final_zone = current_zone
+            if stand_id.startswith('8') and len(stand_id) >= 3:
+                final_zone = "De-icing Apron"
 
-# 4. 결과 저장
+            extracted_data.append({
+                'Stand_ID': stand_id,
+                'Lat': lat_dec,
+                'Lon': lon_dec,
+                'Category': final_zone  # 구역 정보 저장
+            })
+
+# 저장
 if extracted_data:
     df_result = pd.DataFrame(extracted_data)
-    output_filename = 'rksi_stands.csv'
-    df_result.to_csv(output_filename, index=False, encoding='utf-8-sig')
-    print(f"변환 완료! '{output_filename}' 파일이 생성되었습니다. (총 {len(df_result)}개 데이터)")
-    print("이제 Streamlit 앱을 실행하시면 됩니다.")
+    df_result.to_csv('rksi_stands_zoned.csv', index=False, encoding='utf-8-sig')
+    print(f"✅ 분류 완료! 총 {len(df_result)}개 스팟 추출")
+    print(df_result['Category'].value_counts()) # 구역별 개수 출력
 else:
-    print("데이터 추출 실패. 원본 파일의 형식을 확인해주세요.")
+    print("❌ 데이터를 찾지 못했습니다.")
