@@ -3,7 +3,7 @@ import re
 
 # 1. 원본 파일 읽기 (사용자님이 업로드하신 파일명과 일치해야 함)
 # 만약 파일명이 다르다면 아래 이름을 실제 파일명으로 수정해주세요.
-input_file = '(2-3) AIRCRAFT PARKING DOCKING CHART_OCR.xlsx - Table 1.csv'
+input_file = '(2-3) AIRCRAFT PARKING DOCKING CHART_OCR.csv'
 
 try:
     df = pd.read_csv(input_file)
