@@ -79,7 +79,7 @@ color_map = {
     'Cargo Apron 1': 'orange',  # 화물1: 주황
     'Cargo Apron 2': 'darkred', # 화물2: 진한 빨강
     'Maintenance Apron': 'black', # 정비: 검정
-    'De-icing Apron': 'cadetblue', # 제방빙: 청록
+    'De-icing Apron': 'skyblue', # 제방빙: 청록
     'Isolated Security Position': 'red' # 격리: 빨강 (경고)
 }
 
@@ -89,8 +89,8 @@ for _, row in df_filtered.iterrows():
     # 매핑된 색상이 없으면 회색(gray) 사용
     color = color_map.get(cat, 'gray') 
     
-    # 격리 주기장은 더 크고 눈에 띄게
-    radius = 8 if 'Isolated' in cat else 4
+    # 제방빙장은 더 크고 눈에 띄게
+    radius = 8 if 'De-icing Apron' in cat else 4
     
     folium.CircleMarker(
         location=[row['Lat'], row['Lon']],
@@ -126,4 +126,5 @@ with col2:
         stats = df_filtered['Category'].value_counts().reindex(all_categories).fillna(0).astype(int).reset_index()
         stats.columns = ['구역', '개수']
         st.dataframe(stats, hide_index=True)
+
 
