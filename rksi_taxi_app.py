@@ -79,7 +79,7 @@ color_map = {
     'Cargo Apron 1': 'orange',  # 화물1: 주황
     'Cargo Apron 2': 'darkred', # 화물2: 진한 빨강
     'Maintenance Apron': 'black', # 정비: 검정
-    'De-icing Apron': 'mint', # 제방빙: 민트
+    'De-icing Apron': 'aqua', # 제방빙: 아쿠아
     'Isolated Security Position': 'red' # 격리: 빨강 (경고)
 }
 
@@ -126,6 +126,7 @@ with col2:
         stats = df_filtered['Category'].value_counts().reindex(all_categories).fillna(0).astype(int).reset_index()
         stats.columns = ['구역', '개수']
         st.dataframe(stats, hide_index=True)
+
 
 
 
