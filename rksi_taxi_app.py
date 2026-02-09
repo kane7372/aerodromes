@@ -2,25 +2,30 @@ import streamlit as st
 import pandas as pd
 import folium
 from streamlit_folium import st_folium
+import os
 
-st.set_page_config(page_title="Incheon Airport Zone Analysis", layout="wide")
-st.title("🛫 인천공항(RKSI) 주기장 구역별 시각화")
+st.set_page_config(page_title="Incheon Airport Zone Map", layout="wide")
 
-# 1. 데이터 로드 (새로 만든 파일 rksi_stands_zoned.csv)
+# 1. 데이터 로드
 @st.cache_data
 def load_data():
-    try:
-        return pd.read_csv('rksi_stands_zoned.csv')
-    except:
-        st.error("데이터 파일(rksi_stands_zoned.csv)이 없습니다. preprocess.py를 먼저 실행하세요.")
+    file_path = 'rksi_stands_zoned.csv'
+    if not os.path.exists(file_path):
+        st.error(f"🚨 '{file_path}' 파일이 없습니다! 먼저 데이터 복구 코드를 실행해주세요.")
         return pd.DataFrame()
+    return pd.read_csv(file_path)
 
 df = load_data()
+
+st.title("🛫 인천공항(RKSI) 주기장 8개 구역별 상세 지도")
+
+if df.empty:
+    st.stop()
 
 # 2. 사이드바 설정
 st.sidebar.header("설정 (Configuration)")
 
-# 활주로 좌표 (상시 표시용)
+# 활주로 좌표
 runways = {
     '33L': (37.454167, 126.460833), '33R': (37.456389, 126.464722),
     '34L': (37.441111, 126.437778), '34R': (37.443333, 126.441667),
@@ -28,83 +33,92 @@ runways = {
 }
 
 # 3. 구역(Category) 필터링
-if not df.empty:
-    # 데이터에 있는 카테고리 목록 가져오기
-    all_categories = df['Category'].unique().tolist()
+# 실제 데이터에 존재하는 구역만 정렬해서 표시
+all_categories = sorted(df['Category'].unique().tolist())
+
+# 우선순위 정렬 (Apron -> Cargo -> Others)
+sort_order = [
+    'Apron 1', 'Apron 2', 'Apron 3', 
+    'Cargo Apron 1', 'Cargo Apron 2', 
+    'Maintenance Apron', 'De-icing Apron', 'Isolated Security Position'
+]
+all_categories = sorted(all_categories, key=lambda x: sort_order.index(x) if x in sort_order else 99)
+
+st.sidebar.subheader("표시할 구역 선택")
+selected_zones = st.sidebar.multiselect(
+    "구역(Zone) 필터",
+    options=all_categories,
+    default=all_categories
+)
+
+df_filtered = df[df['Category'].isin(selected_zones)]
+
+# 4. 지도 시각화
+# 중심 좌표를 데이터의 평균 위치로 자동 조정
+center_lat = df['Lat'].mean() if not df.empty else 37.46
+center_lon = df['Lon'].mean() if not df.empty else 126.44
+m = folium.Map(location=[center_lat, center_lon], zoom_start=13)
+
+# 활주로 표시
+for r_name, coord in runways.items():
+    folium.Marker(
+        location=coord,
+        popup=f"RWY {r_name}",
+        icon=folium.Icon(color='gray', icon='plane', prefix='fa')
+    ).add_to(m)
+
+# 8개 구역별 색상 매핑 (Color Mapping)
+color_map = {
+    'Apron 1': 'blue',          # T1: 파랑
+    'Apron 2': 'green',         # 탑승동: 초록
+    'Apron 3': 'purple',        # T2: 보라
+    'Cargo Apron 1': 'orange',  # 화물1: 주황
+    'Cargo Apron 2': 'darkred', # 화물2: 진한 빨강
+    'Maintenance Apron': 'black', # 정비: 검정
+    'De-icing Apron': 'cadetblue', # 제방빙: 청록
+    'Isolated Security Position': 'red' # 격리: 빨강 (경고)
+}
+
+# 주기장 마커 찍기
+for _, row in df_filtered.iterrows():
+    cat = row['Category']
+    # 매핑된 색상이 없으면 회색(gray) 사용
+    color = color_map.get(cat, 'gray') 
     
-    st.sidebar.subheader("표시할 구역 선택")
-    selected_zones = st.sidebar.multiselect(
-        "구역(Zone) 필터",
-        options=all_categories,
-        default=all_categories # 기본적으로 모두 선택
-    )
+    # 격리 주기장은 더 크고 눈에 띄게
+    radius = 8 if 'Isolated' in cat else 4
     
-    # 선택된 구역만 필터링
-    df_filtered = df[df['Category'].isin(selected_zones)]
+    folium.CircleMarker(
+        location=[row['Lat'], row['Lon']],
+        radius=radius,
+        color=color,
+        fill=True,
+        fill_opacity=0.7,
+        popup=f"<b>[{cat}]</b><br>Stand: {row['Stand_ID']}",
+        tooltip=f"{row['Stand_ID']}"
+    ).add_to(m)
 
-    # 4. 지도 시각화
-    m = folium.Map(location=[37.46, 126.44], zoom_start=13)
+# 화면 구성
+col1, col2 = st.columns([3, 1])
 
-    # 활주로 표시 (회색 아이콘)
-    for r_name, coord in runways.items():
-        folium.Marker(
-            location=coord,
-            popup=f"RWY {r_name}",
-            icon=folium.Icon(color='gray', icon='plane', prefix='fa')
-        ).add_to(m)
+with col1:
+    st_folium(m, width="100%", height=700)
 
-    # 구역별 색상 매핑
-    color_map = {
-        'Passenger Apron': 'blue',       # 여객: 파랑
-        'Cargo Apron': 'orange',         # 화물: 주황
-        'Maintenance Apron': 'black',    # 정비: 검정/회색
-        'Isolated Security Position': 'red', # 격리: 빨강 (경고색)
-        'De-icing Apron': 'cyan'         # 제방빙: 하늘색
-    }
-
-    # 주기장 마커 찍기
-    for _, row in df_filtered.iterrows():
-        cat = row['Category']
-        color = color_map.get(cat, 'green') # 지정 안 된 건 초록
-        
-        # 격리 주기장은 좀 더 눈에 띄게 표시
-        radius = 8 if 'Isolated' in cat else 4
-        
-        folium.CircleMarker(
-            location=[row['Lat'], row['Lon']],
-            radius=radius,
-            color=color,
-            fill=True,
-            fill_opacity=0.7,
-            popup=f"<b>[{cat}]</b><br>Stand: {row['Stand_ID']}",
-            tooltip=f"{row['Stand_ID']} ({cat})"
-        ).add_to(m)
-
-    # 화면 구성
-    col1, col2 = st.columns([3, 1])
+with col2:
+    st.subheader("범례 (Legend)")
     
-    with col1:
-        st_folium(m, width="100%", height=600)
+    # 범례 HTML 생성
+    legend_html = ""
+    for zone in all_categories:
+        c = color_map.get(zone, 'gray')
+        legend_html += f"- <span style='color:{c}'>●</span> **{zone}**<br>"
     
-    with col2:
-        st.subheader("범례 (Legend)")
-        # 범례를 컬러 박스로 표시
-        st.markdown(f"""
-        - <span style='color:blue'>●</span> **Passenger Apron**: 여객 터미널
-        - <span style='color:orange'>●</span> **Cargo Apron**: 화물 터미널
-        - <span style='color:black'>●</span> **Maintenance**: 정비 주기장
-        - <span style='color:red'>●</span> **Isolated**: 격리 주기장
-        - <span style='color:cyan'>●</span> **De-icing**: 제방빙 패드
-        """, unsafe_allow_html=True)
-        
-        st.divider()
-        st.write(f"**총 표시 개수:** {len(df_filtered)}개")
-        
-        # 데이터 통계 표
-        if not df_filtered.empty:
-            stats = df_filtered['Category'].value_counts().reset_index()
-            stats.columns = ['구역', '개수']
-            st.dataframe(stats, hide_index=True)
-
-else:
-    st.warning("데이터가 없습니다.")
+    st.markdown(legend_html, unsafe_allow_html=True)
+    
+    st.divider()
+    st.write(f"**총 표시 개수:** {len(df_filtered)}개")
+    
+    if not df_filtered.empty:
+        stats = df_filtered['Category'].value_counts().reindex(all_categories).fillna(0).astype(int).reset_index()
+        stats.columns = ['구역', '개수']
+        st.dataframe(stats, hide_index=True)
