@@ -76,6 +76,7 @@ color_map = {
     'Apron 1': 'blue',          # T1: 파랑
     'Apron 2': 'green',         # 탑승동: 초록
     'Apron 3': 'purple',        # T2: 보라
+    'Apron 4': 'cadetblue',
     'Cargo Apron 1': 'orange',  # 화물1: 주황
     'Cargo Apron 2': 'darkred', # 화물2: 진한 빨강
     'Maintenance Apron': 'black', # 정비: 검정
