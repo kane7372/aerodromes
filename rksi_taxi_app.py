@@ -42,7 +42,7 @@ all_categories = sorted(df['Category'].unique().tolist())
 
 # 우선순위 정렬 (Apron -> Cargo -> Others)
 sort_order = [
-    'Apron 1', 'Apron 2', 'Apron 3', 
+    'Apron 1', 'Apron 2', 'Apron 3', 'Apron 4',
     'Cargo Apron 1', 'Cargo Apron 2', 
     'Maintenance Apron', 'De-icing Apron', 'Isolated Security Position'
 ]
