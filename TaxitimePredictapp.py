@@ -20,12 +20,19 @@ plt.rcParams['axes.unicode_minus'] = False
 st.set_page_config(page_title="❄️ ATD-RAM 예측 랩", layout="wide")
 
 # ==========================================
-# 1. 데이터 로드
+# 0. 사이드바 - 데이터 업로드 구역 🌟 [NEW]
+# ==========================================
+st.sidebar.header("📁 데이터 업로드")
+st.sidebar.info("코랩에서 만든 `ATD_RAM_Master.parquet` 파일을 여기에 올려주세요!")
+uploaded_file = st.sidebar.file_uploader("데이터 파일 업로드", type=['parquet'])
+
+# ==========================================
+# 1. 데이터 로드 (업로드된 파일 읽기)
 # ==========================================
 @st.cache_data
-def load_data():
+def load_data(file):
     try:
-        df = pd.read_parquet('data/processed/ATD_RAM_Master.parquet')
+        df = pd.read_parquet(file)
         target_col = 'Target_ATD_RAM'
         drop_from_train = ['Year', 'FLT', 'RAM_Datetime', target_col]
         available_features = [c for c in df.columns if c not in drop_from_train]
@@ -33,11 +40,18 @@ def load_data():
     except Exception as e:
         return None, None, None
 
-master_df, available_features, target_col = load_data()
-if master_df is None:
-    st.error("🚨 `data/processed/ATD_RAM_Master.parquet` 파일이 없습니다. `processor.py`를 먼저 실행해주세요.")
-    st.stop()
+# 파일이 업로드되지 않았을 때의 처리
+if uploaded_file is None:
+    st.title("📊 ATD-RAM 예측 대시보드")
+    st.warning("👈 사이드바에서 데이터 파일(`.parquet`)을 먼저 업로드해주세요!")
+    st.stop() # 여기서 멈춤 (아래 코드 실행 안 함)
 
+# 파일이 업로드되면 데이터 로드
+master_df, available_features, target_col = load_data(uploaded_file)
+
+if master_df is None:
+    st.error("🚨 파일을 읽는 중 오류가 발생했습니다. 정상적인 Parquet 파일인지 확인해주세요.")
+    st.stop()
 # ==========================================
 # 2. 사이드바 컨트롤러 (강력한 필터링 장착!)
 # ==========================================
