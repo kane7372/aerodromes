@@ -66,25 +66,17 @@ learning_mode = st.sidebar.radio(
 st.sidebar.markdown("---")
 st.sidebar.subheader("🔍 데이터 정밀 필터링 (Data Filters)")
 
-remove_outliers = st.sidebar.toggle("🚨 3-Sigma 극단치(대규모 지연) 제외", value=True, 
-                                    help="현업 기준 240분 등 통계적 극단치를 제외하고 평균적인 성능을 높일지 선택합니다.")
+remove_outliers = st.sidebar.toggle("🚨 3-Sigma 극단치(대규모 지연) 제외", value=True)
 
-# 1. 여객/화물 구분 (NAT 열 기반 동적 필터링)
-if 'NAT' in master_df.columns:
-    # NAT 컬럼에 있는 고유값들(예: PAX, CGO 등)을 긁어와서 선택지로 만듭니다.
-    available_nats = master_df['NAT'].dropna().unique().tolist()
-    selected_nats = st.sidebar.multiselect("✈️ 운항편 타입 (NAT)", available_nats, default=available_nats)
+# 1. 기상 현상 (Weather Type) 필터 🌟 [NEW]
+if 'Weather_Type' in master_df.columns:
+    available_weather = master_df['Weather_Type'].dropna().unique().tolist()
+    # WMO 4677 기반으로 분류된 기상 현상 선택 (기본적으로 모두 선택)
+    selected_weather = st.sidebar.multiselect("🌤️ 기상 현상 (Weather Type)", available_weather, default=available_weather)
 else:
-    selected_nats = []
+    selected_weather = []
 
-# 2. 운항 상태 (STS) 필터
-if 'STS' in master_df.columns:
-    available_sts = master_df['STS'].dropna().unique().tolist()
-    selected_sts = st.sidebar.multiselect("📌 운항 상태 (STS)", available_sts, default=available_sts)
-else:
-    selected_sts = []
-
-# 3. 강설 페이즈 필터
+# 2. 강설 페이즈 필터
 if 'Snow_Phase' in master_df.columns:
     available_phases = master_df['Snow_Phase'].dropna().unique().tolist()
     default_phases = [p for p in available_phases if 'Clear' not in p] 
@@ -92,13 +84,27 @@ if 'Snow_Phase' in master_df.columns:
 else:
     selected_phases = []
 
+# 3. 여객/화물 구분 (NAT 열 기반)
+if 'NAT' in master_df.columns:
+    available_nats = master_df['NAT'].dropna().unique().tolist()
+    selected_nats = st.sidebar.multiselect("✈️ 운항편 타입 (NAT)", available_nats, default=available_nats)
+else:
+    selected_nats = []
+
+# 4. 운항 상태 (STS) 필터
+if 'STS' in master_df.columns:
+    available_sts = master_df['STS'].dropna().unique().tolist()
+    selected_sts = st.sidebar.multiselect("📌 운항 상태 (STS)", available_sts, default=available_sts)
+else:
+    selected_sts = []
+
 st.sidebar.markdown("---")
 st.sidebar.subheader("⚙️ Optuna 튜닝 설정")
 n_trials = st.sidebar.slider("Optuna 최대 탐색 횟수", 10, 100, 30, 10)
-early_stop_rounds = st.sidebar.number_input("조기 종료 브레이크 (N회 연속 개선 없으면 중단, 0=끄기)", 
-                                            min_value=0, max_value=50, value=10, step=1)
+early_stop_rounds = st.sidebar.number_input("조기 종료 브레이크 (0=끄기)", min_value=0, max_value=50, value=10, step=1)
 
-exclude_from_train = ['Year', 'FLT', 'RAM_Datetime', target_col, 'Snow_Phase', 'STS', 'NAT']
+# 🚨 [중요] 필터링용 텍스트 변수들은 머신러닝 '학습 변수'에서 반드시 빼줘야 합니다!
+exclude_from_train = ['Year', 'FLT', 'RAM_Datetime', target_col, 'Snow_Phase', 'STS', 'NAT', 'Weather_Type']
 trainable_features = [c for c in master_df.columns if c not in exclude_from_train]
 
 selected_features = st.sidebar.multiselect("⚙️ 학습 변수 (Feature Selection)", trainable_features, default=trainable_features)
@@ -110,23 +116,27 @@ start_training = st.sidebar.button("🚀 모델 학습 시작", type="primary", 
 def apply_filters(df):
     filtered_df = df.copy()
     
-    # 1. 3-Sigma 이상치 필터
+    # 0. 3-Sigma 필터
     if remove_outliers:
         mean_delay, std_delay = filtered_df[target_col].mean(), filtered_df[target_col].std()
         threshold = max(mean_delay + (3 * std_delay), 240.0)
         filtered_df = filtered_df[filtered_df[target_col] <= threshold]
         
-    # 2. NAT(여객/화물) 필터
+    # 1. 기상 현상 필터 적용 🌟 [NEW]
+    if selected_weather:
+        filtered_df = filtered_df[filtered_df['Weather_Type'].isin(selected_weather)]
+        
+    # 2. 강설 페이즈 필터
+    if selected_phases:
+        filtered_df = filtered_df[filtered_df['Snow_Phase'].isin(selected_phases)]
+
+    # 3. NAT(여객/화물) 필터
     if selected_nats:
         filtered_df = filtered_df[filtered_df['NAT'].isin(selected_nats)]
         
-    # 3. STS 필터
+    # 4. STS 필터
     if selected_sts:
         filtered_df = filtered_df[filtered_df['STS'].isin(selected_sts)]
-        
-    # 4. 강설 페이즈 필터
-    if selected_phases:
-        filtered_df = filtered_df[filtered_df['Snow_Phase'].isin(selected_phases)]
         
     return filtered_df
 
