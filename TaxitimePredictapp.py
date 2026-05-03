@@ -11,6 +11,7 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 import joblib
 import warnings
+import time
 
 warnings.filterwarnings('ignore')
 
@@ -20,7 +21,7 @@ plt.rcParams['axes.unicode_minus'] = False
 st.set_page_config(page_title="❄️ ATD-RAM 예측 랩", layout="wide")
 
 # ==========================================
-# 0. 사이드바 - 데이터 업로드 구역 🌟 [NEW]
+# 0. 사이드바 - 데이터 업로드 구역
 # ==========================================
 st.sidebar.header("📁 데이터 업로드")
 st.sidebar.info("코랩에서 만든 `ATD_RAM_Master.parquet` 파일을 여기에 올려주세요!")
@@ -40,20 +41,19 @@ def load_data(file):
     except Exception as e:
         return None, None, None
 
-# 파일이 업로드되지 않았을 때의 처리
 if uploaded_file is None:
     st.title("📊 ATD-RAM 예측 대시보드")
     st.warning("👈 사이드바에서 데이터 파일(`.parquet`)을 먼저 업로드해주세요!")
-    st.stop() # 여기서 멈춤 (아래 코드 실행 안 함)
+    st.stop() 
 
-# 파일이 업로드되면 데이터 로드
 master_df, available_features, target_col = load_data(uploaded_file)
 
 if master_df is None:
     st.error("🚨 파일을 읽는 중 오류가 발생했습니다. 정상적인 Parquet 파일인지 확인해주세요.")
     st.stop()
+
 # ==========================================
-# 2. 사이드바 컨트롤러 (강력한 필터링 장착!)
+# 2. 사이드바 컨트롤러
 # ==========================================
 st.sidebar.header("🎛️ 학습 및 시뮬레이션 세팅")
 
@@ -85,14 +85,19 @@ else:
     selected_phases = []
 
 st.sidebar.markdown("---")
-n_trials = st.sidebar.slider("Optuna 탐색 횟수", 10, 100, 30, 10)
+st.sidebar.subheader("⚙️ Optuna 튜닝 설정")
+n_trials = st.sidebar.slider("Optuna 최대 탐색 횟수", 10, 100, 30, 10)
+
+# 🌟 [NEW] 조기 종료(Early Stopping) 컨트롤러 추가
+early_stop_rounds = st.sidebar.number_input("조기 종료 브레이크 (N회 연속 개선 없으면 중단, 0=끄기)", 
+                                            min_value=0, max_value=50, value=10, step=1,
+                                            help="지정된 횟수만큼 성능이 오르지 않으면 시간을 아끼기 위해 튜닝을 조기 종료합니다.")
 
 exclude_from_train = ['Year', 'FLT', 'RAM_Datetime', target_col, 'Snow_Phase', 'STS']
 trainable_features = [c for c in master_df.columns if c not in exclude_from_train]
 
 selected_features = st.sidebar.multiselect("⚙️ 학습 변수 (Feature Selection)", trainable_features, default=trainable_features)
 start_training = st.sidebar.button("🚀 모델 학습 시작", type="primary", use_container_width=True)
-
 
 # ==========================================
 # 2-5. 필터링 적용 로직
@@ -121,16 +126,51 @@ def apply_filters(df):
 current_df = apply_filters(master_df)
 
 # ==========================================
+# 🌟 [NEW] Optuna 스트림릿 전용 콜백 클래스
+# ==========================================
+class StreamlitOptunaCallback:
+    def __init__(self, n_trials, early_stopping_rounds, model_name, pbar, status_text):
+        self.n_trials = n_trials
+        self.early_stopping_rounds = early_stopping_rounds
+        self.model_name = model_name
+        self.pbar = pbar
+        self.status_text = status_text
+        self.best_score = float('inf')
+        self.no_improvement_count = 0
+
+    def __call__(self, study, trial):
+        current_trial = trial.number + 1
+        progress = min(current_trial / self.n_trials, 1.0) # 프로그레스 바는 0.0 ~ 1.0
+        
+        # UI 업데이트 로직
+        if trial.value is not None:
+            if trial.value < self.best_score:
+                self.best_score = trial.value
+                self.no_improvement_count = 0
+                improvement_flag = "✨ **최고 기록 갱신!**"
+            else:
+                self.no_improvement_count += 1
+                improvement_flag = ""
+
+            self.pbar.progress(progress)
+            self.status_text.markdown(f"**[{self.model_name}]** 진행: {current_trial} / {self.n_trials} | 현재 최고 MAE: `{self.best_score:.4f}` | 정체 카운트: {self.no_improvement_count}/{self.early_stopping_rounds} {improvement_flag}")
+
+            # 조기 종료(Early Stopping) 조건 체크
+            if self.early_stopping_rounds > 0 and self.no_improvement_count >= self.early_stopping_rounds:
+                self.status_text.warning(f"🛑 **{self.model_name} 조기 종료:** {self.early_stopping_rounds}회 연속 개선이 없어 튜닝을 멈춥니다. (총 {current_trial}회 탐색 완료)")
+                study.stop() # Optuna 스톱!
+
+# ==========================================
 # 3. 모델 학습 함수
 # ==========================================
-def run_training(df, features, mode, trials):
+def run_training(df, features, mode, trials, early_stop_rounds, pbar, status_text):
     X = df[features]
     y = np.log1p(df[target_col])
     
     X_train_full, X_test, y_train_full, y_test = train_test_split(X, y, test_size=0.1, random_state=42, shuffle=False)
     X_train, X_valid, y_train, y_valid = train_test_split(X_train_full, y_train_full, test_size=0.1, random_state=42, shuffle=False)
     
-    # XGBoost 튜닝
+    # 1. XGBoost 튜닝
     def xgb_obj(trial):
         params = {
             'n_estimators': trial.suggest_int('n_estimators', 500, 1500, step=500),
@@ -143,7 +183,12 @@ def run_training(df, features, mode, trials):
         return mean_absolute_error(np.expm1(y_valid), np.expm1(model.predict(X_valid)))
 
     study_xgb = optuna.create_study(direction='minimize')
-    study_xgb.optimize(xgb_obj, n_trials=trials)
+    xgb_callback = StreamlitOptunaCallback(trials, early_stop_rounds, "XGBoost", pbar, status_text)
+    study_xgb.optimize(xgb_obj, n_trials=trials, callbacks=[xgb_callback])
+    
+    # 튜닝 종료 후 잠시 대기 (유저가 메시지를 읽을 수 있게)
+    time.sleep(1)
+    
     xgb_best = xgb.XGBRegressor(**study_xgb.best_params, objective='reg:squarederror', random_state=42, n_jobs=-1)
     xgb_best.fit(X_train_full, y_train_full)
     
@@ -154,6 +199,8 @@ def run_training(df, features, mode, trials):
         meta_model = None
         
     else: # 스태킹 모드
+        # 2. LGBM 튜닝
+        pbar.progress(0) # 프로그레스 바 초기화
         def lgb_obj(trial):
             params = {
                 'n_estimators': trial.suggest_int('n_estimators', 500, 1500, step=500),
@@ -167,10 +214,15 @@ def run_training(df, features, mode, trials):
             return mean_absolute_error(np.expm1(y_valid), np.expm1(model.predict(X_valid)))
 
         study_lgb = optuna.create_study(direction='minimize')
-        study_lgb.optimize(lgb_obj, n_trials=trials)
+        lgb_callback = StreamlitOptunaCallback(trials, early_stop_rounds, "LightGBM", pbar, status_text)
+        study_lgb.optimize(lgb_obj, n_trials=trials, callbacks=[lgb_callback])
+        
         lgb_best = lgb.LGBMRegressor(**study_lgb.best_params, objective='regression', random_state=42, n_jobs=-1, verbose=-1)
         lgb_best.fit(X_train_full, y_train_full)
         
+        status_text.success("🎉 메타 모델(Stacking) 가중치 조율 중...")
+        
+        # 3. 스태킹
         xgb_val = xgb_best.predict(X_valid)
         lgb_val = lgb_best.predict(X_valid)
         meta_model = LinearRegression(positive=True)
@@ -205,7 +257,6 @@ def run_training(df, features, mode, trials):
 st.title("📊 ATD-RAM 예측 랩 (Lab)")
 st.info(f"💡 현재 설정된 필터 기준 데이터: **총 {len(current_df):,} 건** (전체 {len(master_df):,} 건)")
 
-# 🌟 탭 생성
 tab1, tab2, tab3, tab4 = st.tabs(["📊 모델 평가", "🧠 SHAP 분석", "🔗 다중공선성(VIF)", "🎯 핀셋 튜닝"])
 
 with tab1:
@@ -213,10 +264,16 @@ with tab1:
         if len(selected_features) < 5:
             st.warning("변수를 최소 5개 이상 선택해주세요!")
         else:
-            with st.spinner(f"{learning_mode} 진행 중... (Optuna {n_trials}회 탐색)"):
-                xgb_model, meta_model, metrics, y_actual, y_pred, X_test = run_training(current_df, selected_features, learning_mode, n_trials)
+            st.markdown("### 🏃‍♂️ 실시간 튜닝 진행 상황")
+            # 🌟 [NEW] UI 표시를 위한 빈 공간(Placeholder) 할당
+            pbar = st.progress(0)
+            status_text = st.empty()
+            
+            with st.spinner("AI가 최적의 파라미터를 찾는 중입니다..."):
+                xgb_model, meta_model, metrics, y_actual, y_pred, X_test = run_training(
+                    current_df, selected_features, learning_mode, n_trials, early_stop_rounds, pbar, status_text
+                )
                 
-                # 탭 이동을 위해 세션 저장
                 st.session_state['xgb_model'] = xgb_model
                 st.session_state['meta_model'] = meta_model
                 st.session_state['test_actual'] = y_actual
