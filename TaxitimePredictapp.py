@@ -53,7 +53,7 @@ if master_df is None:
     st.stop()
 
 # ==========================================
-# 2. 사이드바 컨트롤러
+# 2. 사이드바 컨트롤러 (강력한 필터링 장착!)
 # ==========================================
 st.sidebar.header("🎛️ 학습 및 시뮬레이션 세팅")
 
@@ -69,16 +69,24 @@ st.sidebar.subheader("🔍 데이터 정밀 필터링 (Data Filters)")
 remove_outliers = st.sidebar.toggle("🚨 3-Sigma 극단치(대규모 지연) 제외", value=True, 
                                     help="현업 기준 240분 등 통계적 극단치를 제외하고 평균적인 성능을 높일지 선택합니다.")
 
-cargo_filter = st.sidebar.radio("✈️ 운항편 타입", ["전체 (All)", "여객기만 (Passenger)", "화물기만 (Cargo)"])
+# 1. 여객/화물 구분 (NAT 열 기반 동적 필터링)
+if 'NAT' in master_df.columns:
+    # NAT 컬럼에 있는 고유값들(예: PAX, CGO 등)을 긁어와서 선택지로 만듭니다.
+    available_nats = master_df['NAT'].dropna().unique().tolist()
+    selected_nats = st.sidebar.multiselect("✈️ 운항편 타입 (NAT)", available_nats, default=available_nats)
+else:
+    selected_nats = []
 
+# 2. 운항 상태 (STS) 필터
 if 'STS' in master_df.columns:
-    available_sts = master_df['STS'].unique().tolist()
+    available_sts = master_df['STS'].dropna().unique().tolist()
     selected_sts = st.sidebar.multiselect("📌 운항 상태 (STS)", available_sts, default=available_sts)
 else:
     selected_sts = []
 
+# 3. 강설 페이즈 필터
 if 'Snow_Phase' in master_df.columns:
-    available_phases = master_df['Snow_Phase'].unique().tolist()
+    available_phases = master_df['Snow_Phase'].dropna().unique().tolist()
     default_phases = [p for p in available_phases if 'Clear' not in p] 
     selected_phases = st.sidebar.multiselect("❄️ 강설 라이프사이클 (Snow Phase)", available_phases, default=default_phases)
 else:
@@ -87,13 +95,10 @@ else:
 st.sidebar.markdown("---")
 st.sidebar.subheader("⚙️ Optuna 튜닝 설정")
 n_trials = st.sidebar.slider("Optuna 최대 탐색 횟수", 10, 100, 30, 10)
-
-# 🌟 [NEW] 조기 종료(Early Stopping) 컨트롤러 추가
 early_stop_rounds = st.sidebar.number_input("조기 종료 브레이크 (N회 연속 개선 없으면 중단, 0=끄기)", 
-                                            min_value=0, max_value=50, value=10, step=1,
-                                            help="지정된 횟수만큼 성능이 오르지 않으면 시간을 아끼기 위해 튜닝을 조기 종료합니다.")
+                                            min_value=0, max_value=50, value=10, step=1)
 
-exclude_from_train = ['Year', 'FLT', 'RAM_Datetime', target_col, 'Snow_Phase', 'STS']
+exclude_from_train = ['Year', 'FLT', 'RAM_Datetime', target_col, 'Snow_Phase', 'STS', 'NAT']
 trainable_features = [c for c in master_df.columns if c not in exclude_from_train]
 
 selected_features = st.sidebar.multiselect("⚙️ 학습 변수 (Feature Selection)", trainable_features, default=trainable_features)
@@ -105,26 +110,27 @@ start_training = st.sidebar.button("🚀 모델 학습 시작", type="primary", 
 def apply_filters(df):
     filtered_df = df.copy()
     
+    # 1. 3-Sigma 이상치 필터
     if remove_outliers:
         mean_delay, std_delay = filtered_df[target_col].mean(), filtered_df[target_col].std()
         threshold = max(mean_delay + (3 * std_delay), 240.0)
         filtered_df = filtered_df[filtered_df[target_col] <= threshold]
         
-    if cargo_filter == "여객기만 (Passenger)":
-        filtered_df = filtered_df[filtered_df['Is_Cargo'] == 0]
-    elif cargo_filter == "화물기만 (Cargo)":
-        filtered_df = filtered_df[filtered_df['Is_Cargo'] == 1]
+    # 2. NAT(여객/화물) 필터
+    if selected_nats:
+        filtered_df = filtered_df[filtered_df['NAT'].isin(selected_nats)]
         
+    # 3. STS 필터
     if selected_sts:
         filtered_df = filtered_df[filtered_df['STS'].isin(selected_sts)]
         
+    # 4. 강설 페이즈 필터
     if selected_phases:
         filtered_df = filtered_df[filtered_df['Snow_Phase'].isin(selected_phases)]
         
     return filtered_df
 
 current_df = apply_filters(master_df)
-
 # ==========================================
 # 🌟 [NEW] Optuna 스트림릿 전용 콜백 클래스
 # ==========================================
