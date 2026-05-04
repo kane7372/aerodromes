@@ -60,7 +60,7 @@ st.sidebar.header("🎛️ 학습 및 시뮬레이션 세팅")
 
 learning_mode = st.sidebar.radio(
     "학습 모드 선택 (Speed vs Accuracy)",
-    ["🚀 빠른 분석 (XGBoost 단일)", "🎯 영혼 끌어모으기 (Stacking)"]
+    ["🚀 빠른 분석 (XGBoost 단일일", "🎯 영혼 끌어모으기 (Stacking)"]
 )
 
 # 🌟 데이터 정밀 필터링 스위치 구역
@@ -276,7 +276,7 @@ def run_training(df, features, mode, trials, early_stop_rounds, pbar, status_tex
     xgb_best = xgb.XGBRegressor(**study_xgb.best_params, objective='reg:squarederror', random_state=42, n_jobs=-1)
     xgb_best.fit(X_train_full, y_train_full)
     
-    final_model_name = "XGBoost 단일"
+    final_model_name = "XGBoost (Single)"
     
     if mode == "🚀 빠른 분석 (XGBoost 단일)":
         final_preds_log = xgb_best.predict(X_test)
@@ -313,7 +313,7 @@ def run_training(df, features, mode, trials, early_stop_rounds, pbar, status_tex
         xgb_test = xgb_best.predict(X_test)
         lgb_test = lgb_best.predict(X_test)
         final_preds_log = meta_model.predict(pd.DataFrame({'XGB': xgb_test, 'LGBM': lgb_test}))
-        final_model_name = "Stacking 앙상블"
+        final_model_name = "Stacking (Ensenble)"
 
     final_preds = np.expm1(final_preds_log)
     if 'Physical_Min_Taxi' in X_test.columns:
