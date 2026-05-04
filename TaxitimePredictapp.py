@@ -15,8 +15,9 @@ import time
 
 warnings.filterwarnings('ignore')
 
-plt.rcParams['font.family'] = 'Malgun Gothic'
-plt.rcParams['axes.unicode_minus'] = False
+# 폰트 깨짐 방지를 위해 영문 라벨 사용 (한글 폰트 설정 제거)
+# plt.rcParams['font.family'] = 'Malgun Gothic'
+# plt.rcParams['axes.unicode_minus'] = False
 
 st.set_page_config(page_title="❄️ ATD-RAM 예측 랩", layout="wide")
 
@@ -68,10 +69,9 @@ st.sidebar.subheader("🔍 데이터 정밀 필터링 (Data Filters)")
 
 remove_outliers = st.sidebar.toggle("🚨 3-Sigma 극단치(대규모 지연) 제외", value=True)
 
-# 1. 기상 현상 (Weather Type) 필터 🌟 [NEW]
+# 1. 기상 현상 (Weather Type) 필터
 if 'Weather_Type' in master_df.columns:
     available_weather = master_df['Weather_Type'].dropna().unique().tolist()
-    # WMO 4677 기반으로 분류된 기상 현상 선택 (기본적으로 모두 선택)
     selected_weather = st.sidebar.multiselect("🌤️ 기상 현상 (Weather Type)", available_weather, default=available_weather)
 else:
     selected_weather = []
@@ -98,12 +98,50 @@ if 'STS' in master_df.columns:
 else:
     selected_sts = []
 
+# ==========================================
+# 🌟 [NEW] 학습 및 평가 대상 '연도(Year)' 자유 조립기
+# ==========================================
+st.sidebar.markdown("---")
+st.sidebar.subheader("📅 데이터 연도(Year) 조립기")
+
+if 'Year' in master_df.columns:
+    available_years = sorted(master_df['Year'].dropna().unique().astype(int).tolist())
+    
+    train_years = st.sidebar.multiselect(
+        "🧠 학습(Train)에 사용할 연도 선택", 
+        available_years, 
+        default=available_years,
+        help="선택한 연도의 데이터만 모아서 AI를 학습시킵니다."
+    )
+    
+    test_mode = st.sidebar.radio(
+        "🎯 평가(Test) 데이터 추출 방식",
+        [
+            "학습 데이터 내에서 10% 자동 분할 (기본)", 
+            "특정 연도를 통째로 평가(Test)에 배정",
+            "선택한 연도 전체를 학습하고 자체 평가 (In-Sample)"
+        ],
+        help="'자동 분할'은 학습 데이터의 마지막 10%를 씁니다. '통째로 평가'는 아예 본 적 없는 연도로 백테스트할 때 쓰며, '자체 평가'는 Test 데이터 없이 학습한 데이터를 그대로 다시 풀어보는 방식입니다."
+    )
+    
+    if test_mode == "특정 연도를 통째로 평가(Test)에 배정":
+        target_test_years = st.sidebar.multiselect(
+            "실전 예측(Test)할 연도 선택",
+            available_years,
+            default=[available_years[-1]]
+        )
+    else:
+        target_test_years = []
+else:
+    train_years = []
+    test_mode = "학습 데이터 내에서 10% 자동 분할 (기본)"
+    target_test_years = []
+
 st.sidebar.markdown("---")
 st.sidebar.subheader("⚙️ Optuna 튜닝 설정")
 n_trials = st.sidebar.slider("Optuna 최대 탐색 횟수", 10, 100, 30, 10)
 early_stop_rounds = st.sidebar.number_input("조기 종료 브레이크 (0=끄기)", min_value=0, max_value=50, value=10, step=1)
 
-# 🚨 [중요] 필터링용 텍스트 변수들은 머신러닝 '학습 변수'에서 반드시 빼줘야 합니다!
 exclude_from_train = ['Year', 'FLT', 'RAM_Datetime', target_col, 'Snow_Phase', 'STS', 'NAT', 'Weather_Type']
 trainable_features = [c for c in master_df.columns if c not in exclude_from_train]
 
@@ -116,33 +154,29 @@ start_training = st.sidebar.button("🚀 모델 학습 시작", type="primary", 
 def apply_filters(df):
     filtered_df = df.copy()
     
-    # 0. 3-Sigma 필터
     if remove_outliers:
         mean_delay, std_delay = filtered_df[target_col].mean(), filtered_df[target_col].std()
         threshold = max(mean_delay + (3 * std_delay), 240.0)
         filtered_df = filtered_df[filtered_df[target_col] <= threshold]
         
-    # 1. 기상 현상 필터 적용 🌟 [NEW]
     if selected_weather:
         filtered_df = filtered_df[filtered_df['Weather_Type'].isin(selected_weather)]
         
-    # 2. 강설 페이즈 필터
     if selected_phases:
         filtered_df = filtered_df[filtered_df['Snow_Phase'].isin(selected_phases)]
 
-    # 3. NAT(여객/화물) 필터
     if selected_nats:
         filtered_df = filtered_df[filtered_df['NAT'].isin(selected_nats)]
         
-    # 4. STS 필터
     if selected_sts:
         filtered_df = filtered_df[filtered_df['STS'].isin(selected_sts)]
         
     return filtered_df
 
 current_df = apply_filters(master_df)
+
 # ==========================================
-# 🌟 [NEW] Optuna 스트림릿 전용 콜백 클래스
+# 🌟 Optuna 스트림릿 전용 콜백 클래스
 # ==========================================
 class StreamlitOptunaCallback:
     def __init__(self, n_trials, early_stopping_rounds, model_name, pbar, status_text):
@@ -156,9 +190,8 @@ class StreamlitOptunaCallback:
 
     def __call__(self, study, trial):
         current_trial = trial.number + 1
-        progress = min(current_trial / self.n_trials, 1.0) # 프로그레스 바는 0.0 ~ 1.0
+        progress = min(current_trial / self.n_trials, 1.0)
         
-        # UI 업데이트 로직
         if trial.value is not None:
             if trial.value < self.best_score:
                 self.best_score = trial.value
@@ -171,19 +204,55 @@ class StreamlitOptunaCallback:
             self.pbar.progress(progress)
             self.status_text.markdown(f"**[{self.model_name}]** 진행: {current_trial} / {self.n_trials} | 현재 최고 MAE: `{self.best_score:.4f}` | 정체 카운트: {self.no_improvement_count}/{self.early_stopping_rounds} {improvement_flag}")
 
-            # 조기 종료(Early Stopping) 조건 체크
             if self.early_stopping_rounds > 0 and self.no_improvement_count >= self.early_stopping_rounds:
-                self.status_text.warning(f"🛑 **{self.model_name} 조기 종료:** {self.early_stopping_rounds}회 연속 개선이 없어 튜닝을 멈춥니다. (총 {current_trial}회 탐색 완료)")
-                study.stop() # Optuna 스톱!
+                self.status_text.warning(f"🛑 **{self.model_name} 조기 종료:** {self.early_stopping_rounds}회 연속 개선이 없어 튜닝을 멈춥니다.")
+                study.stop()
 
 # ==========================================
 # 3. 모델 학습 함수
 # ==========================================
-def run_training(df, features, mode, trials, early_stop_rounds, pbar, status_text):
-    X = df[features]
-    y = np.log1p(df[target_col])
+def run_training(df, features, mode, trials, early_stop_rounds, pbar, status_text, train_years, test_mode, target_test_years):
+    X_all = df[features]
+    y_all = np.log1p(df[target_col])
+    year_col = df['Year'].astype(int)
     
-    X_train_full, X_test, y_train_full, y_test = train_test_split(X, y, test_size=0.1, random_state=42, shuffle=False)
+    # 🌟 연도 분할 로직 적용
+    if test_mode == "학습 데이터 내에서 10% 자동 분할 (기본)":
+        mask = year_col.isin(train_years)
+        X_selected = X_all[mask]
+        y_selected = y_all[mask]
+        
+        if len(X_selected) < 100:
+            st.error("🚨 선택한 학습 연도에 데이터가 너무 적습니다. 조건을 완화해주세요!")
+            st.stop()
+            
+        X_train_full, X_test, y_train_full, y_test = train_test_split(X_selected, y_selected, test_size=0.1, random_state=42, shuffle=False)
+        
+    elif test_mode == "특정 연도를 통째로 평가(Test)에 배정":
+        train_mask = year_col.isin(train_years)
+        test_mask = year_col.isin(target_test_years)
+        
+        X_train_full = X_all[train_mask]
+        y_train_full = y_all[train_mask]
+        X_test = X_all[test_mask]
+        y_test = y_all[test_mask]
+        
+        if len(X_train_full) < 50 or len(X_test) == 0:
+            st.error("🚨 학습 또는 테스트 데이터가 비어있습니다. 연도를 다시 선택해주세요!")
+            st.stop()
+            
+    else: # 선택한 연도 전체를 학습하고 자체 평가 (In-Sample)
+        mask = year_col.isin(train_years)
+        X_train_full = X_all[mask]
+        y_train_full = y_all[mask]
+        
+        if len(X_train_full) < 50:
+            st.error("🚨 선택한 학습 연도에 데이터가 너무 적습니다!")
+            st.stop()
+            
+        X_test = X_train_full.copy()
+        y_test = y_train_full.copy()
+
     X_train, X_valid, y_train, y_valid = train_test_split(X_train_full, y_train_full, test_size=0.1, random_state=42, shuffle=False)
     
     # 1. XGBoost 튜닝
@@ -202,7 +271,6 @@ def run_training(df, features, mode, trials, early_stop_rounds, pbar, status_tex
     xgb_callback = StreamlitOptunaCallback(trials, early_stop_rounds, "XGBoost", pbar, status_text)
     study_xgb.optimize(xgb_obj, n_trials=trials, callbacks=[xgb_callback])
     
-    # 튜닝 종료 후 잠시 대기 (유저가 메시지를 읽을 수 있게)
     time.sleep(1)
     
     xgb_best = xgb.XGBRegressor(**study_xgb.best_params, objective='reg:squarederror', random_state=42, n_jobs=-1)
@@ -215,8 +283,7 @@ def run_training(df, features, mode, trials, early_stop_rounds, pbar, status_tex
         meta_model = None
         
     else: # 스태킹 모드
-        # 2. LGBM 튜닝
-        pbar.progress(0) # 프로그레스 바 초기화
+        pbar.progress(0)
         def lgb_obj(trial):
             params = {
                 'n_estimators': trial.suggest_int('n_estimators', 500, 1500, step=500),
@@ -238,7 +305,6 @@ def run_training(df, features, mode, trials, early_stop_rounds, pbar, status_tex
         
         status_text.success("🎉 메타 모델(Stacking) 가중치 조율 중...")
         
-        # 3. 스태킹
         xgb_val = xgb_best.predict(X_valid)
         lgb_val = lgb_best.predict(X_valid)
         meta_model = LinearRegression(positive=True)
@@ -254,11 +320,19 @@ def run_training(df, features, mode, trials, early_stop_rounds, pbar, status_tex
         final_preds = np.maximum(final_preds, X_test['Physical_Min_Taxi'].values)
     y_test_real = np.expm1(y_test)
     
+    # 🌟 연도별 성능 리포트용 DataFrame 생성
+    results_df = pd.DataFrame({
+        'Year': df.loc[X_test.index, 'Year'],
+        'Actual': y_test_real,
+        'Pred': final_preds
+    })
+    
     res = {
         'Model': final_model_name,
         'RMSE': np.sqrt(mean_squared_error(y_test_real, final_preds)),
         'MAE': mean_absolute_error(y_test_real, final_preds),
-        'R2': r2_score(y_test_real, final_preds)
+        'R2': r2_score(y_test_real, final_preds),
+        'Yearly_Results': results_df
     }
     
     if meta_model is not None:
@@ -268,7 +342,7 @@ def run_training(df, features, mode, trials, early_stop_rounds, pbar, status_tex
     return xgb_best, meta_model, res, y_test_real, final_preds, X_test
 
 # ==========================================
-# 4. 화면 구성 (탭 부활!)
+# 4. 화면 구성
 # ==========================================
 st.title("📊 ATD-RAM 예측 랩 (Lab)")
 st.info(f"💡 현재 설정된 필터 기준 데이터: **총 {len(current_df):,} 건** (전체 {len(master_df):,} 건)")
@@ -281,13 +355,13 @@ with tab1:
             st.warning("변수를 최소 5개 이상 선택해주세요!")
         else:
             st.markdown("### 🏃‍♂️ 실시간 튜닝 진행 상황")
-            # 🌟 [NEW] UI 표시를 위한 빈 공간(Placeholder) 할당
             pbar = st.progress(0)
             status_text = st.empty()
             
             with st.spinner("AI가 최적의 파라미터를 찾는 중입니다..."):
                 xgb_model, meta_model, metrics, y_actual, y_pred, X_test = run_training(
-                    current_df, selected_features, learning_mode, n_trials, early_stop_rounds, pbar, status_text
+                    current_df, selected_features, learning_mode, n_trials, early_stop_rounds, pbar, status_text,
+                    train_years, test_mode, target_test_years
                 )
                 
                 st.session_state['xgb_model'] = xgb_model
@@ -302,19 +376,43 @@ with tab1:
             
             c1, c2, c3 = st.columns(3)
             c1.metric("R² Score", f"{metrics['R2']:.4f}")
-            c2.metric("MAE (평균 오차)", f"{metrics['MAE']:.2f} 분")
-            c3.metric("RMSE", f"{metrics['RMSE']:.2f} 분")
+            c2.metric("MAE (Mean Abs Error)", f"{metrics['MAE']:.2f} Min")
+            c3.metric("RMSE", f"{metrics['RMSE']:.2f} Min")
             
             if meta_model is not None:
-                st.info(f"⚖️ **스태킹 가중치** - XGBoost: {metrics['XGB_W']:.3f} | LightGBM: {metrics['LGB_W']:.3f}")
+                st.info(f"⚖️ **Stacking Weights** - XGBoost: {metrics['XGB_W']:.3f} | LightGBM: {metrics['LGB_W']:.3f}")
                 
             fig, ax = plt.subplots(figsize=(8, 5))
             sns.scatterplot(x=y_actual, y=y_pred, alpha=0.5, ax=ax)
             ax.plot([0, max(y_actual)], [0, max(y_actual)], 'r--', lw=2)
-            ax.set_xlabel('실제 지연 (분)')
-            ax.set_ylabel('예측 지연 (분)')
-            ax.set_title(f'실제 vs 예측 ({metrics["Model"]})')
+            ax.set_xlabel('Actual Delay (Minutes)')
+            ax.set_ylabel('Predicted Delay (Minutes)')
+            ax.set_title(f'Actual vs Predicted Delay ({metrics["Model"]})')
             st.pyplot(fig)
+            
+            # 🌟 [NEW] 연도별 세부 성능 리포트 출력
+            st.markdown("---")
+            st.subheader("📅 연도별 세부 성능 리포트 (Year-wise Analysis)")
+            
+            yearly_res = metrics['Yearly_Results']
+            summary_list = []
+            
+            for year in sorted(yearly_res['Year'].unique()):
+                y_sub = yearly_res[yearly_res['Year'] == year]
+                mae = mean_absolute_error(y_sub['Actual'], y_sub['Pred'])
+                rmse = np.sqrt(mean_squared_error(y_sub['Actual'], y_sub['Pred']))
+                r2 = r2_score(y_sub['Actual'], y_sub['Pred'])
+                summary_list.append({
+                    'Year': f"{int(year)}",
+                    'Count': f"{len(y_sub):,} rows",
+                    'MAE (Min)': round(mae, 2),
+                    'RMSE (Min)': round(rmse, 2),
+                    'R2 Score': round(r2, 4)
+                })
+            
+            st.table(pd.DataFrame(summary_list))
+            st.caption("※ 평가(Test) 대상 데이터 내에 포함된 연도별 성능입니다.")
+            
     else:
         st.info("👈 사이드바에서 세팅을 마치고 '학습 시작'을 눌러주세요.")
 
