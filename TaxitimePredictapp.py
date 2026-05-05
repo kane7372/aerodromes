@@ -417,10 +417,114 @@ with tab1:
         st.info("👈 사이드바에서 세팅을 마치고 '학습 시작'을 눌러주세요.")
 
 with tab2:
-    st.subheader("🧠 SHAP 분석 (개발 대기 중...)")
-    
+    st.subheader("🧠 SHAP 분석 (지연 원인 해부)")
+    if 'xgb_model' in st.session_state:
+        st.info("💡 **SHAP (SHapley Additive exPlanations)**: AI가 특정 항공편의 지연을 예측할 때, 어떤 변수가 지연을 늘렸고(+) 어떤 변수가 줄였는지(-) 기여도를 분석합니다.")
+        
+        with st.spinner("SHAP Value 계산 중입니다. 데이터가 많으면 수십 초 정도 걸릴 수 있습니다..."):
+            model = st.session_state['xgb_model']
+            X_test_shap = st.session_state['X_test']
+            
+            # 속도를 위해 최대 1000건만 샘플링하여 분석
+            if len(X_test_shap) > 1000:
+                X_test_shap = X_test_shap.sample(1000, random_state=42)
+                
+            explainer = shap.TreeExplainer(model)
+            shap_values = explainer(X_test_shap)
+            
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                st.markdown("#### 📊 변수 중요도 (Summary Plot)")
+                fig1, ax1 = plt.subplots(figsize=(8, 6))
+                # 한글 깨짐 방지를 위해 내부 폰트 사이즈 조정
+                shap.summary_plot(shap_values, X_test_shap, plot_type="bar", show=False)
+                plt.title("Overall Feature Importance", fontsize=12)
+                st.pyplot(fig1)
+                
+            with col2:
+                st.markdown("#### 🐝 변수 영향도 (Beeswarm Plot)")
+                fig2, ax2 = plt.subplots(figsize=(8, 6))
+                shap.plots.beeswarm(shap_values, show=False)
+                plt.title("Impact on Delay (+: Increase, -: Decrease)", fontsize=12)
+                st.pyplot(fig2)
+                
+            st.markdown("---")
+            st.markdown("#### 🔍 개별 항공편 원인 분석 (Waterfall Plot)")
+            sample_idx = st.number_input("분석할 항공편의 인덱스(순번)를 입력하세요 (0 ~ 999):", min_value=0, max_value=min(999, len(X_test_shap)-1), value=0)
+            
+            fig3, ax3 = plt.subplots(figsize=(10, 5))
+            shap.plots.waterfall(shap_values[sample_idx], show=False)
+            plt.title(f"Why was Flight #{sample_idx} delayed?", fontsize=12)
+            st.pyplot(fig3)
+    else:
+        st.warning("👈 1번 탭에서 '모델 학습'을 먼저 완료해야 분석이 가능합니다!")
+
 with tab3:
-    st.subheader("🔗 다중공선성(VIF) 검사 (개발 대기 중...)")
+    st.subheader("🔗 다중공선성(VIF) 검사기")
+    if 'X_test' in st.session_state:
+        st.info("💡 **VIF (Variance Inflation Factor)**: 변수들끼리 의미가 겹치는지(상관관계) 확인합니다. VIF가 10 이상이면 다른 변수와 의미가 중복되므로 모델에서 빼는 것이 좋습니다.")
+        
+        with st.spinner("다중공선성을 계산 중입니다..."):
+            X_vif = st.session_state['X_test'].copy()
+            # 결측치나 무한대 값이 있으면 VIF 에러가 나므로 0으로 채움
+            X_vif = X_vif.replace([np.inf, -np.inf], 0).fillna(0)
+            
+            vif_data = pd.DataFrame()
+            vif_data["Feature"] = X_vif.columns
+            vif_data["VIF_Score"] = [variance_inflation_factor(X_vif.values, i) for i in range(len(X_vif.columns))]
+            vif_data = vif_data.sort_values(by="VIF_Score", ascending=False).reset_index(drop=True)
+            
+            # VIF가 10 이상인 '위험' 변수와 안전한 변수 분리
+            danger_vif = vif_data[vif_data["VIF_Score"] >= 10.0]
+            safe_vif = vif_data[vif_data["VIF_Score"] < 10.0]
+            
+            c1, c2 = st.columns(2)
+            with c1:
+                st.error(f"🚨 제거 권장 변수 (VIF >= 10) : {len(danger_vif)} 개")
+                st.dataframe(danger_vif, use_container_width=True)
+            with c2:
+                st.success(f"✅ 안전한 변수 (VIF < 10) : {len(safe_vif)} 개")
+                st.dataframe(safe_vif, use_container_width=True)
+    else:
+        st.warning("👈 1번 탭에서 '모델 학습'을 먼저 완료해야 분석이 가능합니다!")
 
 with tab4:
-    st.subheader("🎯 핀셋 튜닝 해부 (개발 대기 중...)")
+    st.subheader("🎯 핀셋 튜닝 (What-If 시뮬레이터)")
+    if 'xgb_model' in st.session_state:
+        st.info("💡 **What-If 분석**: 특정 항공편의 조건(날씨, 거리 등)을 통제센터에서 인위적으로 변경해 보았을 때, 지연 시간이 어떻게 변하는지 실시간으로 시뮬레이션합니다.")
+        
+        model = st.session_state['xgb_model']
+        X_test_sim = st.session_state['X_test'].copy()
+        
+        # 특정 상황의 비행기 고르기
+        row_idx = st.selectbox("✈️ 시뮬레이션 할 항공편 선택 (Test 데이터 기준)", X_test_sim.index.tolist())
+        original_data = X_test_sim.loc[[row_idx]]
+        
+        # 원본 예측값
+        orig_pred = np.expm1(model.predict(original_data))[0]
+        actual_delay = st.session_state['test_actual'][X_test_sim.index.get_loc(row_idx)]
+        
+        col_m1, col_m2, col_m3 = st.columns(3)
+        col_m1.metric("실제 지연 시간 (Actual)", f"{actual_delay:.1f} 분")
+        col_m2.metric("AI 예측 지연 (Original)", f"{orig_pred:.1f} 분")
+        
+        st.markdown("---")
+        st.markdown("### 🎛️ 변수 조작 패널 (값을 더블클릭해서 수정해보세요!)")
+        
+        # 🌟 핵심! st.data_editor를 통한 실시간 데이터 수정
+        edited_data = st.data_editor(original_data, num_rows="fixed", use_container_width=True)
+        
+        if st.button("🚀 조작된 데이터로 다시 예측하기 (Re-Predict)"):
+            new_pred = np.expm1(model.predict(edited_data))[0]
+            diff = new_pred - orig_pred
+            
+            # 결과 출력
+            if diff > 0:
+                col_m3.metric("시뮬레이션 결과 (New)", f"{new_pred:.1f} 분", f"+{diff:.1f} 분 악화됨", delta_color="inverse")
+            else:
+                col_m3.metric("시뮬레이션 결과 (New)", f"{new_pred:.1f} 분", f"{diff:.1f} 분 단축됨!", delta_color="normal")
+            
+            st.success("✅ 시뮬레이션 완료! 조작한 조건에 따라 지연 시간이 위와 같이 변동됩니다.")
+    else:
+        st.warning("👈 1번 탭에서 '모델 학습'을 먼저 완료해야 분석이 가능합니다!")
