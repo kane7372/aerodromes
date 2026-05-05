@@ -347,6 +347,17 @@ def run_training(df, features, mode, trials, early_stop_rounds, pbar, status_tex
 st.title("📊 ATD-RAM 예측 랩 (Lab)")
 st.info(f"💡 현재 설정된 필터 기준 데이터: **총 {len(current_df):,} 건** (전체 {len(master_df):,} 건)")
 
+# 🌟 [NEW] 연도별 데이터 분포(통계) 접었다 펴기 버튼 추가
+with st.expander("📅 필터링된 데이터 연도별 건수 보기 (클릭하여 펼치기)"):
+    if 'Year' in current_df.columns:
+        # 연도별 건수 계산 및 데이터프레임 이쁘게 다듬기
+        yearly_counts = current_df['Year'].value_counts().sort_index().reset_index()
+        yearly_counts.columns = ['연도 (Year)', '데이터 건수 (Rows)']
+        yearly_counts['연도 (Year)'] = yearly_counts['연도 (Year)'].astype(int).astype(str) + "년"
+        
+        # 가로로 깔끔하게 표(Table) 형태로 출력
+        st.dataframe(yearly_counts, hide_index=True, use_container_width=True)
+        
 tab1, tab2, tab3, tab4, tab5 = st.tabs([ # 👈 tab5 추가!
     "📊 모델 평가", "🧠 SHAP 분석", "🔗 다중공선성(VIF)", "🎯 핀셋 튜닝", "🚀 실시간 예측(Deploy)" # 👈 이름 추가!
 ])
