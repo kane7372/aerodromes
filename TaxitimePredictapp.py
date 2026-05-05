@@ -347,7 +347,9 @@ def run_training(df, features, mode, trials, early_stop_rounds, pbar, status_tex
 st.title("📊 ATD-RAM 예측 랩 (Lab)")
 st.info(f"💡 현재 설정된 필터 기준 데이터: **총 {len(current_df):,} 건** (전체 {len(master_df):,} 건)")
 
-tab1, tab2, tab3, tab4 = st.tabs(["📊 모델 평가", "🧠 SHAP 분석", "🔗 다중공선성(VIF)", "🎯 핀셋 튜닝"])
+tab1, tab2, tab3, tab4, tab5 = st.tabs([ # 👈 tab5 추가!
+    "📊 모델 평가", "🧠 SHAP 분석", "🔗 다중공선성(VIF)", "🎯 핀셋 튜닝", "🚀 실시간 예측(Deploy)" # 👈 이름 추가!
+])
 
 with tab1:
     if start_training:
@@ -528,3 +530,84 @@ with tab4:
             st.success("✅ 시뮬레이션 완료! 조작한 조건에 따라 지연 시간이 위와 같이 변동됩니다.")
     else:
         st.warning("👈 1번 탭에서 '모델 학습'을 먼저 완료해야 분석이 가능합니다!")
+
+with tab5:
+    st.subheader("🚀 실시간 지연 예측기 (Live Inference)")
+    if 'xgb_model' in st.session_state:
+        st.info("💡 **통제센터 실무 모드**: 현재 들어온 비행 스케줄과 기상 상황을 입력하면, 학습된 챔피언 모델(XGBoost)이 즉시 예상 지연 시간을 도출합니다.")
+        
+        # 모델이 학습할 때 썼던 변수 목록과 데이터의 형태(타입/범위) 가져오기
+        selected_features = st.session_state['selected_features']
+        X_template = st.session_state['X_test']
+        
+        st.markdown("### 📝 운항 및 기상 조건 수동 입력")
+        
+        # st.form을 사용하여 값을 하나 입력할 때마다 화면이 깜빡이는 것을 방지
+        with st.form("prediction_form"):
+            cols = st.columns(3)
+            user_inputs = {}
+            
+            # 선택된 변수 개수만큼 알아서 입력 칸(Widget) 생성
+            for i, col_name in enumerate(selected_features):
+                col = cols[i % 3]
+                
+                # 숫자형 변수인 경우
+                if pd.api.types.is_numeric_dtype(X_template[col_name]):
+                    unique_vals = X_template[col_name].dropna().unique()
+                    
+                    # 1. 0/1 등 범주가 5개 이하인 숫자 (예: Is_Cargo) -> 선택창(Selectbox)
+                    if len(unique_vals) <= 5:
+                        unique_vals = sorted(unique_vals.tolist())
+                        default_val = int(X_template[col_name].mode()[0])
+                        idx = unique_vals.index(default_val) if default_val in unique_vals else 0
+                        user_inputs[col_name] = col.selectbox(f"🗂️ {col_name}", unique_vals, index=idx)
+                        
+                    # 2. 연속된 진짜 숫자 (예: 이동거리, 온도 등) -> 숫자 입력창(Number_input)
+                    else:
+                        min_v = float(X_template[col_name].min())
+                        max_v = float(X_template[col_name].max())
+                        mean_v = float(X_template[col_name].mean())
+                        step = (max_v - min_v) / 100 if max_v != min_v else 0.1
+                        user_inputs[col_name] = col.number_input(f"🔢 {col_name}", min_value=min_v, max_value=max_v, value=mean_v, step=step)
+                
+                # 문자형 변수인 경우 (텍스트) -> 선택창
+                else:
+                    unique_vals = X_template[col_name].dropna().unique().tolist()
+                    user_inputs[col_name] = col.selectbox(f"🔠 {col_name}", unique_vals)
+            
+            st.markdown("---")
+            submit_btn = st.form_submit_button("🔮 AI 실시간 예측 수행", type="primary", use_container_width=True)
+            
+        # [예측 실행 로직]
+        if submit_btn:
+            # 유저가 입력한 딕셔너리를 1줄짜리 데이터프레임으로 변환
+            input_df = pd.DataFrame([user_inputs])
+            model = st.session_state['xgb_model']
+            
+            with st.spinner("AI가 지연 시간을 계산하고 있습니다..."):
+                # 예측 (Log로 변환해서 학습했으므로 다시 expm1으로 원복)
+                pred_log = model.predict(input_df)
+                pred_minutes = np.expm1(pred_log)[0]
+                
+                # '물리적 최소 지상 이동시간' 변수가 있다면 그 이하로는 예측하지 못하게 방어
+                if 'Physical_Min_Taxi' in input_df.columns:
+                    min_taxi = input_df['Physical_Min_Taxi'].values[0]
+                    pred_minutes = max(pred_minutes, min_taxi)
+            
+            st.markdown("---")
+            st.success("✅ 타겟 비행편의 ATD-RAM (주기장 출발 ~ 실제 이륙) 소요 시간 분석 완료!")
+            
+            res_col1, res_col2 = st.columns(2)
+            res_col1.metric("🤖 AI 예상 지연 시간", f"{pred_minutes:.1f} 분")
+            
+            # 현업 기준 지연 경보등(Traffic Light) 신호
+            if pred_minutes <= 15:
+                res_col2.success("🟢 **정상 운항 예상** (15분 이내)")
+            elif pred_minutes <= 45:
+                res_col2.warning("🟡 **주의 요망** (15~45분 지연 예상)")
+            else:
+                res_col2.error("🔴 **심각 단계** (45분 이상 대규모 지연 예상. 선제적 통제 필요!)")
+                st.snow() # 폭설 지연의 느낌을 살려 눈 내리는 이펙트! ❄️
+                
+    else:
+        st.warning("👈 1번 탭에서 과거 데이터로 '모델 학습'을 먼저 완료해야 실시간 예측이 가능합니다!")
