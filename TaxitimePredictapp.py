@@ -60,7 +60,7 @@ st.sidebar.header("🎛️ 학습 및 시뮬레이션 세팅")
 
 learning_mode = st.sidebar.radio(
     "학습 모드 선택 (Speed vs Accuracy)",
-    ["🚀 빠른 분석 (XGBoost 단일일", "🎯 영혼 끌어모으기 (Stacking)"]
+    ["🚀 빠른 분석 (XGBoost 단일", "🎯 영혼 끌어모으기 (Stacking)"]
 )
 
 # 🌟 데이터 정밀 필터링 스위치 구역
